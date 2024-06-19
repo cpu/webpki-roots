@@ -18,7 +18,7 @@ async fn new_generated_code_is_fresh() {
     let (mut subject, mut spki, mut name_constraints) =
         (String::new(), String::new(), String::new());
 
-    for (_, root) in tls_roots_map {
+    for (_, root) in &tls_roots_map {
         // Verify the DER FP matches the metadata FP.
         let der = root.der();
         let calculated_fp = digest::digest(&digest::SHA256, &der);
@@ -71,11 +71,11 @@ async fn new_generated_code_is_fresh() {
         code.write_fmt(format_args!(
             "    subject: Der::from_slice(b\"{subject}\"),\n"
         ))
-        .unwrap();
+            .unwrap();
         code.write_fmt(format_args!(
             "    subject_public_key_info: Der::from_slice(b\"{spki}\"),\n"
         ))
-        .unwrap();
+            .unwrap();
         match name_constraints.is_empty() {
             false => code
                 .write_fmt(format_args!(
@@ -85,6 +85,23 @@ async fn new_generated_code_is_fresh() {
             true => code.push_str("    name_constraints: None\n"),
         }
         code.push_str("  },\n\n");
+    }
+    code.push_str("];\n");
+
+    let mut encoded_cert_der = String::new();
+    code.push_str("\n#[cfg(feature = \"root_certs\")]\n");
+    code.push_str("pub static TLS_SERVER_ROOT_CERTS: &[CertificateDer] = &[\n");
+    for (_, root) in &tls_roots_map {
+        write!(&mut encoded_cert_der, "&[").unwrap();
+        for &b in root.der().as_ref() {
+            write!(&mut encoded_cert_der, "{:#X},", b).unwrap();
+        }
+        write!(&mut encoded_cert_der, "]").unwrap();
+        code.push_str(&format!("   // {:?}\n", root.common_name_or_certificate_name));
+        code.push_str(&format!(
+            "   CertificateDer::from_der(Der::from_slice({encoded_cert_der})),\n"
+        ));
+        encoded_cert_der.clear();
     }
     code.push_str("];\n");
 
@@ -169,6 +186,8 @@ const HEADER: &str = r#"//! A compiled-in copy of the root certificates trusted 
     unused_qualifications
 )]
 
+#[cfg(feature = "root_certs")]
+use pki_types::CertificateDer;
 use pki_types::{Der, TrustAnchor};
 
 "#;

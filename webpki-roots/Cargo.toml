@@ -8,6 +8,11 @@ homepage = { workspace = true }
 repository = { workspace = true }
 description = "Mozilla's CA root certificates for use with webpki"
 
+[features]
+default = []
+# Generate TLS_SERVER_ROOT_CERTS with trust anchor certificate DER.
+root_certs = []
+
 [dependencies]
 pki-types = { workspace = true }
 

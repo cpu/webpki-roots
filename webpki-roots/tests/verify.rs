@@ -200,3 +200,16 @@ static ALL_ALGORITHMS: &[&dyn SignatureVerificationAlgorithm] = &[
     webpki::ring::RSA_PSS_2048_8192_SHA384_LEGACY_KEY,
     webpki::ring::RSA_PSS_2048_8192_SHA512_LEGACY_KEY,
 ];
+
+#[cfg(feature = "root_certs")]
+#[test]
+fn test_trust_anchor_der() {
+    // Simple smoke-test that:
+    //  a) parses each TLS server root DER.
+    //  b) verifies the parsed cert is a CA certificate.
+    for root in webpki_roots::TLS_SERVER_ROOT_CERTS {
+        let (rest, cert) = x509_parser::parse_x509_certificate(root.as_ref()).unwrap();
+        assert!(rest.is_empty());
+        assert!(cert.is_ca());
+    }
+}
