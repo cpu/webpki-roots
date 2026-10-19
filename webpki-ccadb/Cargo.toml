@@ -9,6 +9,7 @@ repository = { workspace = true }
 description = "Common CA Database (CCADB) interface for use with webpki-roots"
 
 [dependencies]
+aws-lc-rs = { workspace = true }
 csv = { workspace = true }
 hex = { workspace = true }
 jiff = { workspace = true }

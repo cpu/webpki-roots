@@ -1675,6 +1675,7 @@ dependencies = [
 name = "webpki-ccadb"
 version = "0.2.2"
 dependencies = [
+ "aws-lc-rs",
  "csv",
  "hex",
  "jiff",

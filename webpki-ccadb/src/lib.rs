@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
 use std::ops::Add;
 
+use aws_lc_rs::digest;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Zoned};
@@ -96,8 +97,8 @@ impl CertificateMetadata {
     ///
     /// In practice this means it must have valid TrustBits that include TrustBits::Websites,
     /// and if the certificate has a distrust for TLS after date, that it's in the past or
-    /// within a 398-day grace period, and that the fingerprint isn't in the EXCLUDED_FINGERPRINTS
-    /// list.
+    /// within a 398-day grace period, and that neither the certificate nor its SubjectPublicKeyInfo
+    /// has a SHA-256 fingerprint excluded by local policy.
     ///
     /// This grace period allows extant certificates issued before the distrust date to
     /// remain valid for their lifetime. At the time of writing the CA/B forum baseline
@@ -108,6 +109,15 @@ impl CertificateMetadata {
         // If the fingerprint is in the excluded list, it's not trusted based on policy
         // we're imposing ourselves.
         if EXCLUDED_FINGERPRINTS.contains(&self.sha256_fingerprint.as_str()) {
+            return false;
+        }
+
+        // Hash the complete DER SubjectPublicKeyInfo, including its outer SEQUENCE.
+        // Excluding a key also excludes reissued or cross-signed certificates using it.
+        let der = self.der();
+        let (_, cert) = x509_parser::parse_x509_certificate(&der).expect("malformed x509 der");
+        let spki_fingerprint = hex::encode(digest::digest(&digest::SHA256, cert.public_key().raw));
+        if EXCLUDED_SPKI_FINGERPRINTS.contains(&spki_fingerprint.as_str()) {
             return false;
         }
 
@@ -517,6 +527,15 @@ static EXCLUDED_FINGERPRINTS: &[&str] = &[
     "9A296A5182D1D451A2E37F439B74DAAFA267523329F90F9A0D2007C334E23C9A",
 ];
 
+// SHA-256 fingerprints of the complete DER-encoded SubjectPublicKeyInfo, in lowercase hex.
+// These exclusions apply to both generated root bundles, independently of CCADB trust bits.
+static EXCLUDED_SPKI_FINGERPRINTS: &[&str] = &[
+    // emSign Root TLS CA - G3
+    "c619e4780ed8e0abeda24ad732567de4383a7ea941338f6d1a7d1b49ac792fe9",
+    // emSign ECC Root CA - G3
+    "8d417db2dd8bf5e3084d1e3f196d583849d81bdd4c00c70b9d39369e96b8c782",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,16 +551,7 @@ mod tests {
 
     #[test]
     fn test_trusted_for_tls() {
-        let mut metadata = CertificateMetadata {
-            common_name_or_certificate_name: "Test".to_string(),
-            certificate_serial_number: "1".to_string(),
-            sha256_fingerprint: "1".to_string(),
-            trust_bits: "Websites".to_string(),
-            distrust_for_tls_after_date: "".to_string(),
-            test_website_revoked: "".to_string(),
-            mozilla_applied_constraints: "".to_string(),
-            pem_info: "".to_string(),
-        };
+        let mut metadata = tls_metadata(DIGI_CERT_GLOBAL_ROOT_G2);
         // Trust bit set for Websites, no distrust date.
         assert!(metadata.trusted_for_tls());
 
@@ -575,7 +585,48 @@ mod tests {
         assert!(!metadata.trusted_for_tls());
 
         // Certificate FP is excluded.
+        metadata.distrust_for_tls_after_date.clear();
         metadata.sha256_fingerprint = EXCLUDED_FINGERPRINTS[0].to_string();
         assert!(!metadata.trusted_for_tls());
+    }
+
+    #[test]
+    fn test_trusted_for_tls_excluded_spkis() {
+        // The TLS root and its cross-signed certificate have different certificate
+        // fingerprints but the same SPKI, so both must be excluded.
+        for (description, pem) in [
+            (
+                "emSign ECC Root CA - G3",
+                include_str!("data/emsign-ecc-root-ca-g3.pem"),
+            ),
+            (
+                "emSign Root TLS CA - G3",
+                // https://repository.emsign.com/certs/roottlscag3.crt
+                include_str!("data/emsign-root-tls-ca-g3.pem"),
+            ),
+            (
+                "emSign Root TLS CA - G3 (cross-signed)",
+                // https://repository.emsign.com/certs/crosssign/roottlscag3.crt
+                include_str!("data/emsign-root-tls-ca-g3-cross-signed.pem"),
+            ),
+        ] {
+            let metadata = tls_metadata(pem);
+            assert!(!EXCLUDED_FINGERPRINTS.contains(&metadata.sha256_fingerprint.as_str()));
+            assert!(!metadata.trusted_for_tls(), "{description}");
+        }
+    }
+
+    fn tls_metadata(pem: &str) -> CertificateMetadata {
+        let der = CertificateDer::from_pem_slice(pem.as_bytes()).unwrap();
+        CertificateMetadata {
+            common_name_or_certificate_name: "Test".to_string(),
+            certificate_serial_number: "1".to_string(),
+            sha256_fingerprint: hex::encode_upper(digest::digest(&digest::SHA256, &der)),
+            trust_bits: "Websites".to_string(),
+            distrust_for_tls_after_date: "".to_string(),
+            test_website_revoked: "".to_string(),
+            mozilla_applied_constraints: "".to_string(),
+            pem_info: pem.to_string(),
+        }
     }
 }
